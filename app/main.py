@@ -10,6 +10,7 @@ from app.schemas import ChatRequest, ChatResponse, TicketOut
 from app.agent import run_agent
 from app.models import SupportTicket
 from app.seed_data import seed
+from app.rag import build_or_load_vectorstore
 
 app = FastAPI(
     title="AI Customer Support Agent",
@@ -29,6 +30,7 @@ app.add_middleware(
 def startup():
     Base.metadata.create_all(bind=engine)
     seed()
+    build_or_load_vectorstore()  # warm up embeddings/FAQ index now, not on first chat message
 
 
 @app.get("/health")
