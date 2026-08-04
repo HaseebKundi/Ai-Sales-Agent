@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Support Chat Demo</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f4f5f7; display: flex; align-items: center; justify-content: center; min-height: 100vh;
+  }
+  .card {
+    width: 420px; max-width: 92vw; background: #fff; border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08); display: flex; flex-direction: column; height: 640px;
+  }
+  .header { padding: 16px 18px; border-bottom: 1px solid #eee; }
+  .header h1 { font-size: 16px; margin: 0; }
+  .header p { font-size: 12px; color: #888; margin: 4px 0 0; }
+  .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 82%; padding: 10px 13px; border-radius: 12px; font-size: 14px; line-height: 1.4; white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: #f1f2f4; color: #222; border-bottom-left-radius: 4px; }
+  .msg.bot.escalated { background: #fff4e5; border: 1px solid #ffd699; }
+  .meta { font-size: 10px; color: #999; margin-top: 4px; }
+  .input-row { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #eee; }
+  .input-row input {
+    flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid #ddd; font-size: 14px; outline: none;
+  }
+  .input-row input:focus { border-color: #2563eb; }
+  .input-row button {
+    background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 0 16px; font-size: 14px; cursor: pointer;
+  }
+  .input-row button:disabled { opacity: 0.5; cursor: default; }
+  .hint { font-size: 11px; color: #999; padding: 0 16px 10px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h1>🛠️ Support Assistant</h1>
+      <p>Ask about an order (e.g. ORD-1001) or a store policy.</p>
+    </div>
+    <div class="messages" id="messages"></div>
+    <div class="hint">Try: "Where is my order ORD-1001?" · "What's your return policy?" · "This is unacceptable, I want a refund now"</div>
+    <div class="input-row">
+      <input id="input" type="text" placeholder="Type a message..." />
+      <button id="send">Send</button>
+    </div>
+  </div>
+
+<script>
+const messagesEl = document.getElementById('messages');
+const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+
+function addMessage(text, sender, meta) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + sender + (meta && meta.escalated ? ' escalated' : '');
+  div.textContent = text;
+  if (meta) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = meta.label;
+    div.appendChild(m);
+  }
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+async function sendMessage() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  addMessage(text, 'user');
+  inputEl.value = '';
+  sendBtn.disabled = true;
+
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+    const data = await res.json();
+    const label = `intent: ${data.intent} · confidence: ${data.confidence.toFixed(2)}` +
+      (data.escalated ? ' · escalated to human' : '');
+    addMessage(data.response, 'bot', { escalated: data.escalated, label });
+  } catch (err) {
+    addMessage('Something went wrong reaching the server.', 'bot');
+  } finally {
+    sendBtn.disabled = false;
+    inputEl.focus();
+  }
+}
+
+sendBtn.addEventListener('click', sendMessage);
+inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+addMessage("Hi! I'm your support assistant. How can I help today?", 'bot');
+</script>
+</body>
+</html>
