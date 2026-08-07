@@ -1,4 +1,3 @@
-import json
 import re
 from typing import TypedDict, Optional, List
 
@@ -10,6 +9,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import Order, SupportTicket
 from app.rag import search_faq
+from app import memory
 
 llm = ChatGroq(api_key=settings.GROQ_API_KEY, model=settings.GROQ_MODEL, temperature=0)
 
@@ -18,8 +18,6 @@ NUMBER_PATTERN = re.compile(r"\b(\d{3,})\b")
 
 
 def extract_order_id(text: str):
-    """Finds an order number in flexible formats: 'ORD-1001', 'ord1001',
-    'order 1001', '#1001', or just '1001' on its own."""
     match = ORDER_ID_PATTERN.search(text)
     if match:
         return f"ORD-{match.group(1)}"
@@ -29,16 +27,17 @@ def extract_order_id(text: str):
     return None
 
 
-# ---------------------------------------------------------------------------
-# Shared state that flows through every node in the graph
-# ---------------------------------------------------------------------------
 class AgentState(TypedDict):
     user_message: str
+    session_id: str
+    chat_history: str
     intent: str
     order_id: Optional[str]
     order_info: Optional[dict]
+    order_lookup_status: Optional[str]  # "found" | "not_found" | "missing_id"
     faq_matches: Optional[List[dict]]
     confidence: float
+    prompt_to_stream: Optional[str]
     final_response: str
     escalated: bool
     escalation_reason: Optional[str]
@@ -48,17 +47,24 @@ class AgentState(TypedDict):
 # Nodes
 # ---------------------------------------------------------------------------
 def classify_intent(state: AgentState) -> AgentState:
+    history = memory.format_history_for_prompt(state["session_id"])
     prompt = f"""You are an intent classifier for an e-commerce customer support bot.
-Classify the user's message into exactly one of these categories:
+Classify the user's LATEST message into exactly one of these categories:
 - "order_status": asking about an order, shipment, tracking, delivery, or refund status of a SPECIFIC order
 - "faq": general policy questions (returns, shipping times, payment methods, cancellations) not tied to a specific order
 - "complaint": user is frustrated, angry, or reporting a problem that needs a human (wrong item, damaged product, billing dispute)
-- "chitchat": greetings, thanks, acknowledgements, compliments, or casual small talk (e.g. "good", "thanks", "hi", "you're helpful")
-- "other": unclear or off-topic requests that don't fit any category above
+- "chitchat": greetings, thanks, acknowledgements, compliments, casual small talk, questions about the assistant itself
+  (e.g. "who are you"), or questions about the CONVERSATION SO FAR (e.g. "what's my name", "what did I just say",
+  "can you repeat that") — anything answerable just from being friendly or from re-reading the chat history
+- "other": unclear or off-topic requests that genuinely don't fit any category above (e.g. asking something
+  completely unrelated to shopping/support that also isn't casual conversation, like asking for a recipe)
+
+Recent conversation (for context only):
+{history}
+
+Latest customer message: "{state['user_message']}"
 
 Respond with ONLY the category word, nothing else.
-
-User message: "{state['user_message']}"
 """
     result = llm.invoke(prompt)
     intent = result.content.strip().lower()
@@ -67,14 +73,13 @@ User message: "{state['user_message']}"
 
     order_id = extract_order_id(state["user_message"])
 
-    return {**state, "intent": intent, "order_id": order_id}
+    return {**state, "intent": intent, "order_id": order_id, "chat_history": history}
 
 
 def lookup_order(state: AgentState) -> AgentState:
     order_id = state.get("order_id")
     if not order_id:
-        # They asked about an order but gave no ID -> can't help confidently
-        return {**state, "order_info": None, "confidence": 0.2}
+        return {**state, "order_info": None, "order_lookup_status": "missing_id", "confidence": 1.0}
 
     db: Session = SessionLocal()
     try:
@@ -83,7 +88,7 @@ def lookup_order(state: AgentState) -> AgentState:
         db.close()
 
     if not order:
-        return {**state, "order_info": None, "confidence": 0.2}
+        return {**state, "order_info": None, "order_lookup_status": "not_found", "confidence": 1.0}
 
     order_info = {
         "order_id": order.order_id,
@@ -96,7 +101,7 @@ def lookup_order(state: AgentState) -> AgentState:
         ),
         "total_amount": order.total_amount,
     }
-    return {**state, "order_info": order_info, "confidence": 0.95}
+    return {**state, "order_info": order_info, "order_lookup_status": "found", "confidence": 0.95}
 
 
 def check_faq(state: AgentState) -> AgentState:
@@ -112,53 +117,101 @@ def check_faq(state: AgentState) -> AgentState:
 
 
 def decide_confidence(state: AgentState) -> AgentState:
-    # Pass-through node; the actual routing decision happens in the
-    # conditional edge below. Kept as its own node so the graph makes the
-    # "confidence gate" step explicit and easy to reason about / extend.
     return state
 
-def answer_chitchat(state: AgentState) -> AgentState:
-    prompt = f"""You are a friendly customer support assistant. The customer just
-sent a casual message (greeting, thanks, or small talk) rather than a support
-question. Reply naturally and warmly in 1-2 sentences, and invite them to ask
-about an order or a store policy if they need anything.
 
-Customer message: "{state['user_message']}"
-"""
-    result = llm.invoke(prompt)
-    return {**state, "final_response": result.content.strip(), "escalated": False, "escalation_reason": None}
+def build_order_prompt(state: AgentState) -> str:
+    status = state.get("order_lookup_status")
+    history = state.get("chat_history", "")
 
-
-def answer_directly(state: AgentState) -> AgentState:
-    if state["intent"] == "order_status" and state.get("order_info"):
-        prompt = f"""You are a friendly customer support assistant. Using ONLY this order
+    if status == "found":
+        import json
+        return f"""You are a friendly customer support assistant. Using ONLY this order
 data, answer the customer's question naturally in 2-4 sentences. Do not invent details.
+
+Recent conversation (for context):
+{history}
 
 Order data: {json.dumps(state["order_info"])}
 Customer question: "{state['user_message']}"
 """
-    else:
-        matches = state.get("faq_matches") or []
-        context = "\n\n".join(f"Q: {m['question']}\nA: {m['answer']}" for m in matches)
-        prompt = f"""You are a friendly customer support assistant. Using ONLY the FAQ context
+    if status == "not_found":
+        return f"""You are a friendly customer support assistant. The customer asked about
+order ID "{state.get('order_id')}", but no order with that ID exists in our system.
+Politely tell them this order number doesn't exist, ask them to double-check the ID,
+and offer to connect them with a human if they still need help. Keep it to 2-3 sentences.
+
+Recent conversation (for context):
+{history}
+
+Customer message: "{state['user_message']}"
+"""
+    return f"""You are a friendly customer support assistant. The customer is asking about
+an order but didn't include an order ID. Politely ask them to share their order ID
+(e.g. ORD-1001) so you can look it up. Keep it to 1-2 sentences.
+
+Recent conversation (for context):
+{history}
+
+Customer message: "{state['user_message']}"
+"""
+
+
+def build_faq_prompt(state: AgentState) -> str:
+    history = state.get("chat_history", "")
+    matches = state.get("faq_matches") or []
+    context = "\n\n".join(f"Q: {m['question']}\nA: {m['answer']}" for m in matches)
+    return f"""You are a friendly customer support assistant. Using ONLY the FAQ context
 below, answer the customer's question naturally in 2-4 sentences.
+
+Recent conversation (for context):
+{history}
 
 FAQ context:
 {context}
 
 Customer question: "{state['user_message']}"
 """
-    result = llm.invoke(prompt)
-    return {**state, "final_response": result.content.strip(), "escalated": False, "escalation_reason": None}
+
+
+def build_chitchat_prompt(state: AgentState) -> str:
+    history = state.get("chat_history", "")
+    return f"""You are a friendly customer support assistant. The customer just sent a
+casual message — a greeting, thanks, small talk, or a question about the conversation
+itself (like their name, or something they said earlier).
+
+If the answer is present in the recent conversation below, use it and answer directly
+and confidently (e.g. if they told you their name earlier, use it now). If it genuinely
+isn't in the conversation, say so honestly and briefly — don't guess or make something up.
+
+Keep your reply natural and warm, 1-2 sentences. If there's nothing specific to answer,
+invite them to ask about an order or a store policy if they need anything.
+
+Recent conversation (for context):
+{history}
+
+Customer message: "{state['user_message']}"
+"""
+
+
+def answer_directly(state: AgentState) -> AgentState:
+    if state["intent"] == "order_status":
+        prompt = build_order_prompt(state)
+    else:
+        prompt = build_faq_prompt(state)
+    return {**state, "prompt_to_stream": prompt, "final_response": "", "escalated": False, "escalation_reason": None}
+
+
+def answer_chitchat(state: AgentState) -> AgentState:
+    prompt = build_chitchat_prompt(state)
+    return {**state, "prompt_to_stream": prompt, "final_response": "", "escalated": False, "escalation_reason": None}
 
 
 def escalate_to_human(state: AgentState) -> AgentState:
-    if state["intent"] == "order_status" and not state.get("order_info"):
-        reason = "Order ID missing or not found in system."
+    if state["intent"] == "complaint":
+        reason = "Customer complaint requiring human judgment."
     elif state["intent"] == "faq" and state.get("confidence", 0) < settings.CONFIDENCE_THRESHOLD:
         reason = "No confident FAQ match found."
-    elif state["intent"] == "complaint":
-        reason = "Customer complaint requiring human judgment."
     else:
         reason = "Message did not match a known support intent."
 
@@ -180,11 +233,11 @@ def escalate_to_human(state: AgentState) -> AgentState:
         "I want to make sure you get the right help here, so I'm connecting you with a "
         "member of our support team. They'll follow up on this shortly. Thanks for your patience!"
     )
-    return {**state, "final_response": response, "escalated": True, "escalation_reason": reason}
+    return {**state, "prompt_to_stream": None, "final_response": response, "escalated": True, "escalation_reason": reason}
 
 
 # ---------------------------------------------------------------------------
-# Routing (conditional edges)
+# Routing
 # ---------------------------------------------------------------------------
 def route_after_classify(state: AgentState) -> str:
     if state["intent"] == "order_status":
@@ -193,10 +246,12 @@ def route_after_classify(state: AgentState) -> str:
         return "check_faq"
     if state["intent"] == "chitchat":
         return "chitchat"
-    return "escalate"  # complaint / other -> straight to a human
+    return "escalate"
 
 
 def route_after_confidence(state: AgentState) -> str:
+    if state["intent"] == "order_status":
+        return "answer_directly"
     if state["confidence"] >= settings.CONFIDENCE_THRESHOLD:
         return "answer_directly"
     return "escalate"
@@ -244,16 +299,37 @@ def build_agent():
 agent = build_agent()
 
 
-def run_agent(user_message: str) -> AgentState:
-    initial_state: AgentState = {
+def _initial_state(user_message: str, session_id: str) -> AgentState:
+    return {
         "user_message": user_message,
+        "session_id": session_id,
+        "chat_history": "",
         "intent": "",
         "order_id": None,
         "order_info": None,
+        "order_lookup_status": None,
         "faq_matches": None,
         "confidence": 0.0,
+        "prompt_to_stream": None,
         "final_response": "",
         "escalated": False,
         "escalation_reason": None,
     }
-    return agent.invoke(initial_state)
+
+
+def run_agent(user_message: str, session_id: str = "default") -> AgentState:
+    """Non-streaming path: runs the graph, generates the answer in one shot,
+    and saves the exchange to memory. Used by /chat."""
+    result = agent.invoke(_initial_state(user_message, session_id))
+    if result.get("prompt_to_stream"):
+        llm_result = llm.invoke(result["prompt_to_stream"])
+        result["final_response"] = llm_result.content.strip()
+    memory.add_exchange(session_id, user_message, result["final_response"])
+    return result
+
+
+def run_agent_plan(user_message: str, session_id: str = "default") -> AgentState:
+    """Runs the graph up to the point of deciding WHAT to say, without
+    generating the text yet. Used by /chat/stream, which then streams the
+    LLM's answer token-by-token using result['prompt_to_stream']."""
+    return agent.invoke(_initial_state(user_message, session_id))
