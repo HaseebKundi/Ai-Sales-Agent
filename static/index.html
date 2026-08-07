@@ -3,49 +3,111 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Support Chat Demo</title>
+<title>Support Chat</title>
 <style>
-  :root { color-scheme: light; }
+  :root {
+    color-scheme: light;
+    --brand: #2563eb;
+    --brand-dark: #1d4ed8;
+    --bg: #eef1f6;
+    --bot-bg: #f4f5f7;
+    --escalated-bg: #fff4e5;
+    --escalated-border: #ffd699;
+    --text: #1f2430;
+    --muted: #8a8f9a;
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #f4f5f7; display: flex; align-items: center; justify-content: center; min-height: 100vh;
+    background: var(--bg); display: flex; align-items: center; justify-content: center; min-height: 100vh;
   }
   .card {
-    width: 420px; max-width: 92vw; background: #fff; border-radius: 14px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.08); display: flex; flex-direction: column; height: 640px;
+    width: 440px; max-width: 94vw; background: #fff; border-radius: 16px;
+    box-shadow: 0 20px 50px rgba(20,20,40,0.12); display: flex; flex-direction: column; height: 660px;
+    overflow: hidden;
   }
-  .header { padding: 16px 18px; border-bottom: 1px solid #eee; }
-  .header h1 { font-size: 16px; margin: 0; }
-  .header p { font-size: 12px; color: #888; margin: 4px 0 0; }
-  .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-  .msg { max-width: 82%; padding: 10px 13px; border-radius: 12px; font-size: 14px; line-height: 1.4; white-space: pre-wrap; }
-  .msg.user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
-  .msg.bot { align-self: flex-start; background: #f1f2f4; color: #222; border-bottom-left-radius: 4px; }
-  .msg.bot.escalated { background: #fff4e5; border: 1px solid #ffd699; }
-  .meta { font-size: 10px; color: #999; margin-top: 4px; }
-  .input-row { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #eee; }
-  .input-row input {
-    flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid #ddd; font-size: 14px; outline: none;
+  .header {
+    padding: 16px 18px; background: linear-gradient(135deg, var(--brand), var(--brand-dark));
+    color: #fff; display: flex; align-items: center; justify-content: space-between;
   }
-  .input-row input:focus { border-color: #2563eb; }
+  .header-left { display: flex; align-items: center; gap: 10px; }
+  .avatar {
+    width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.2);
+    display: flex; align-items: center; justify-content: center; font-size: 17px;
+  }
+  .header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .header p { font-size: 11px; margin: 2px 0 0; opacity: 0.85; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; display: inline-block; margin-right: 5px; }
+  .new-chat-btn {
+    background: rgba(255,255,255,0.15); border: none; color: #fff; font-size: 11px;
+    padding: 6px 10px; border-radius: 8px; cursor: pointer;
+  }
+  .new-chat-btn:hover { background: rgba(255,255,255,0.25); }
+
+  .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; background: #fbfbfc; }
+  .row { display: flex; gap: 8px; align-items: flex-end; max-width: 88%; }
+  .row.user { align-self: flex-end; flex-direction: row-reverse; }
+  .row.bot { align-self: flex-start; }
+  .bubble-avatar {
+    width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 13px;
+    background: #e5e7eb;
+  }
+  .row.user .bubble-avatar { background: var(--brand); color: #fff; }
+
+  .msg {
+    padding: 10px 13px; border-radius: 14px; font-size: 14px; line-height: 1.45; white-space: pre-wrap;
+  }
+  .row.user .msg { background: var(--brand); color: #fff; border-bottom-right-radius: 4px; }
+  .row.bot .msg { background: var(--bot-bg); color: var(--text); border-bottom-left-radius: 4px; }
+  .row.bot .msg.escalated { background: var(--escalated-bg); border: 1px solid var(--escalated-border); }
+
+  .meta { font-size: 10px; color: var(--muted); margin-top: 5px; }
+
+  .typing-dots { display: inline-flex; gap: 3px; padding: 2px 0; }
+  .typing-dots span {
+    width: 6px; height: 6px; border-radius: 50%; background: #b7bcc7;
+    animation: bounce 1.2s infinite ease-in-out;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+  .hint { font-size: 11px; color: var(--muted); padding: 0 16px 10px; background: #fbfbfc; }
+
+  .input-row { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #eee; background: #fff; }
+  .input-row textarea {
+    flex: 1; padding: 10px 13px; border-radius: 10px; border: 1px solid #ddd; font-size: 14px;
+    outline: none; resize: none; max-height: 90px; font-family: inherit; line-height: 1.4;
+  }
+  .input-row textarea:focus { border-color: var(--brand); }
   .input-row button {
-    background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 0 16px; font-size: 14px; cursor: pointer;
+    background: var(--brand); color: #fff; border: none; border-radius: 10px; padding: 0 18px;
+    font-size: 14px; cursor: pointer; font-weight: 500;
   }
+  .input-row button:hover:not(:disabled) { background: var(--brand-dark); }
   .input-row button:disabled { opacity: 0.5; cursor: default; }
-  .hint { font-size: 11px; color: #999; padding: 0 16px 10px; }
+
+  .messages::-webkit-scrollbar { width: 6px; }
+  .messages::-webkit-scrollbar-thumb { background: #d7dae0; border-radius: 3px; }
 </style>
 </head>
 <body>
   <div class="card">
     <div class="header">
-      <h1>🛠️ Support Assistant</h1>
-      <p>Ask about an order (e.g. ORD-1001) or a store policy.</p>
+      <div class="header-left">
+        <div class="avatar">🛠️</div>
+        <div>
+          <h1>Support Assistant</h1>
+          <p><span class="status-dot"></span>Online</p>
+        </div>
+      </div>
+      <button class="new-chat-btn" id="newChat">New chat</button>
     </div>
     <div class="messages" id="messages"></div>
     <div class="hint">Try: "Where is my order ORD-1001?" · "What's your return policy?" · "This is unacceptable, I want a refund now"</div>
     <div class="input-row">
-      <input id="input" type="text" placeholder="Type a message..." />
+      <textarea id="input" rows="1" placeholder="Type a message..."></textarea>
       <button id="send">Send</button>
     </div>
   </div>
@@ -54,40 +116,102 @@
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('send');
+const newChatBtn = document.getElementById('newChat');
 
-function addMessage(text, sender, meta) {
-  const div = document.createElement('div');
-  div.className = 'msg ' + sender + (meta && meta.escalated ? ' escalated' : '');
-  div.textContent = text;
-  if (meta) {
-    const m = document.createElement('div');
-    m.className = 'meta';
-    m.textContent = meta.label;
-    div.appendChild(m);
-  }
-  messagesEl.appendChild(div);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+function newSessionId() {
+  return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'session-' + Date.now();
 }
+
+let sessionId = sessionStorage.getItem('support_session_id') || newSessionId();
+sessionStorage.setItem('support_session_id', sessionId);
+
+function addRow(sender) {
+  const row = document.createElement('div');
+  row.className = 'row ' + sender;
+
+  const avatar = document.createElement('div');
+  avatar.className = 'bubble-avatar';
+  avatar.textContent = sender === 'user' ? '🙂' : '🛠️';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg bot';
+
+  row.appendChild(avatar);
+  row.appendChild(bubble);
+  messagesEl.appendChild(row);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return bubble;
+}
+
+function addUserMessage(text) {
+  const bubble = addRow('user');
+  bubble.textContent = text;
+}
+
+function addBotPlaceholder() {
+  const bubble = addRow('bot');
+  const dots = document.createElement('div');
+  dots.className = 'typing-dots';
+  dots.innerHTML = '<span></span><span></span><span></span>';
+  bubble.appendChild(dots);
+  return bubble;
+}
+
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 90) + 'px';
+});
 
 async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text) return;
-  addMessage(text, 'user');
+  addUserMessage(text);
   inputEl.value = '';
+  inputEl.style.height = 'auto';
   sendBtn.disabled = true;
 
+  const botBubble = addBotPlaceholder();
+  let firstTokenReceived = false;
+
   try {
-    const res = await fetch('/chat', {
+    const res = await fetch('/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text })
+      body: JSON.stringify({ message: text, session_id: sessionId })
     });
-    const data = await res.json();
-    const label = `intent: ${data.intent} · confidence: ${data.confidence.toFixed(2)}` +
-      (data.escalated ? ' · escalated to human' : '');
-    addMessage(data.response, 'bot', { escalated: data.escalated, label });
+
+    const escalated = res.headers.get('X-Escalated') === 'True';
+    const intent = res.headers.get('X-Intent') || '';
+    const confidence = res.headers.get('X-Confidence') || '0';
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      if (!chunk) continue;
+      if (!firstTokenReceived) {
+        botBubble.innerHTML = '';
+        firstTokenReceived = true;
+      }
+      fullText += chunk;
+      botBubble.textContent = fullText;
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    if (escalated) botBubble.classList.add('escalated');
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = `intent: ${intent} · confidence: ${Number(confidence).toFixed(2)}` +
+      (escalated ? ' · escalated to human' : '');
+    botBubble.appendChild(meta);
   } catch (err) {
-    addMessage('Something went wrong reaching the server.', 'bot');
+    botBubble.innerHTML = '';
+    botBubble.textContent = 'Something went wrong reaching the server.';
   } finally {
     sendBtn.disabled = false;
     inputEl.focus();
@@ -95,9 +219,24 @@ async function sendMessage() {
 }
 
 sendBtn.addEventListener('click', sendMessage);
-inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
 
-addMessage("Hi! I'm your support assistant. How can I help today?", 'bot');
+newChatBtn.addEventListener('click', () => {
+  sessionId = newSessionId();
+  sessionStorage.setItem('support_session_id', sessionId);
+  messagesEl.innerHTML = '';
+  const bubble = addRow('bot');
+  bubble.textContent = "Hi! I'm your support assistant. How can I help today?";
+});
+
+// initial greeting
+const initial = addRow('bot');
+initial.textContent = "Hi! I'm your support assistant. How can I help today?";
 </script>
 </body>
 </html>
